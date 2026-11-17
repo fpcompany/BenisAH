@@ -1,0 +1,17 @@
+## Interface: 120100, 120105, 16001
+## Title: |cff1784d1Benis|rAH
+## Notes: Auction house tab that scans for buyouts below vendor price, for a named item under a max price, or for gear upgrades, with one-click buying.
+## Author: Benis
+## Version: 0.1.0
+## SavedVariables: BenisAHDB
+## OptionalDeps: Auctionator, LibAHTab
+## Category-enUS: Auctions
+## IconTexture: Interface\AddOns\BenisAH\Media\Icon
+## X-Website: https://github.com/fpcompany/BenisAH
+
+Core.lua
+Results.lua
+Upgrade.lua
+Scanner.lua
+Buyer.lua
+UI.lua
