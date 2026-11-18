@@ -2,7 +2,7 @@
 ## Title: |cff1784d1Benis|rAH
 ## Notes: Auction house tab that scans for buyouts below vendor price, for a named item under a max price, or for gear upgrades, with one-click buying.
 ## Author: Benis
-## Version: 0.1.0
+## Version: 0.2.0
 ## SavedVariables: BenisAHDB
 ## OptionalDeps: Auctionator, LibAHTab
 ## Category-enUS: Auctions
