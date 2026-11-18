@@ -13,7 +13,9 @@ Open the auction house and pick the **BenisAH** tab.
 Press **Scan**. BenisAH browses the selected auction house categories and
 lists every auction whose buyout is lower than what a vendor pays for the
 item. The **Categories** button picks which categories are scanned (all by
-default).
+default). **Min profit** leaves out rows whose total profit (vendor price
+minus buyout, times the amount available) is below it; it applies from the
+next scan.
 
 ### Item name and max price
 
@@ -67,9 +69,11 @@ server queries (0.2 to 60, also `/bah delay <seconds>`); it comes on top of the
 server's own throttle. Passes after the first only re-check items whose lowest
 price or quantity changed.
 
-The list is sorted by profit (vendor mode) or price (name mode). Sold auctions
-turn grey. Rows never move while the mouse is over the list, so a row cannot
-slide under the cursor right before a click.
+The newest finds are on top. Auctions that were bought (**Bought**) or sold
+or expired (**Gone**) turn grey and move below the live rows, the latest
+first; the list keeps the last 100 of them. Rows never move while the mouse is over the button columns (amount,
+Buy, refresh, View) or while you type an amount, so a row cannot slide under
+the cursor right before a click.
 
 ## Buying
 
@@ -77,6 +81,11 @@ slide under the cursor right before a click.
   identical auctions show as one row with a count; the button then reads
   **Buy 1**, each click buys one item, and the row reloads in between.
   Total and Profit on such a row are for the whole lot.
+  The game only buys an auction whose item it has loaded, and it keeps only
+  the item searched last loaded. So pointing at **Buy** loads that item, and
+  the scan waits while the mouse stays there. A click that comes before the
+  item is loaded loads it instead (the button shows **...**); click again
+  once it reads **Buy**.
 - **Stackable items**: type how many you want in the box next to **Buy**
   (it starts at everything available within the limit). One click asks the
   server for a price quote, and the quote is confirmed automatically if its
@@ -84,12 +93,20 @@ slide under the cursor right before a click.
   dearer quote is cancelled. If the server does not act on the automatic
   confirm, the button changes to **Confirm** and a second click completes it.
 
+The refresh button next to **Buy** looks up that one item's auctions again,
+ahead of the scan (or on its own when no scan is running), and resets the
+amount box to what is available now.
+
 **View** opens the item in Blizzard's Buy tab, as if you had clicked it in
 the browse results. That reloads its auctions from the server, and for a
 single auction it selects that auction, so the default Bid and Buyout buttons
 are ready. Leaving the BenisAH tab this way stops the scan.
 
 Shift-click an item to link it in chat.
+
+Below the list, **This session** adds up what you bought since the auction
+house was opened: the profit (vendor price minus what you paid, in vendor
+mode), how many items and what they cost. Closing the auction house resets it.
 
 ## What the auction house API does not allow
 

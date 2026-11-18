@@ -111,6 +111,7 @@ function Scanner:Start(mode)
 
 	self.mode = mode
 	self.queries = queries
+	self.minProfit = mode == 'vendor' and (ns.db.minProfit or 0) or 0
 	self.oneShot = false
 	self.token = self.token + 1
 	self.running = true
@@ -123,8 +124,19 @@ function Scanner:Start(mode)
 	return true
 end
 
+-- the row is no longer waiting for its auctions to load
+local function Loaded(candidate)
+	if candidate and candidate.entry and candidate.entry.loading then
+		candidate.entry.loading = nil
+		if ns.UI then ns.UI:MarkDirty() end
+	end
+end
+
 function Scanner:Stop()
 	if not self.running then return end
+	for _, candidate in ipairs(self.queue or {}) do Loaded(candidate) end
+	if self.waiting then Loaded(self.waiting.candidate) end
+	if self.more then Loaded(self.more.candidate) end
 	self.running = false
 	self.oneShot = false
 	self.token = self.token + 1
@@ -134,12 +146,15 @@ end
 
 -- Looks up the auctions of one listed item again, ahead of everything else.
 -- Works without a scan running too: then it is the only query sent.
-function Scanner:Refresh(entry)
-	local candidate = { key = entry.key, itemKey = entry.itemKey, vendor = entry.vendor, limit = entry.limit }
+-- With loadOnly, the row is not rebuilt from the answer: the query only makes
+-- the client hold the item's auctions again (see Load).
+function Scanner:Refresh(entry, loadOnly)
+	local candidate = { key = entry.key, itemKey = entry.itemKey, vendor = entry.vendor, limit = entry.limit,
+		entry = entry, loadOnly = loadOnly, estimate = math.huge }
 	if entry.kind == 'item' and entry.vendor then
 		candidate.limit = entry.vendor - 1
 	end
-	self:Invalidate(entry.key)
+	if not loadOnly then self:Invalidate(entry.key) end
 
 	if self.running then
 		table.insert(self.queue, 1, candidate)
@@ -148,6 +163,7 @@ function Scanner:Refresh(entry)
 
 	self.mode = ns.db.mode
 	self.queries = {}
+	self.minProfit = self.mode == 'vendor' and (ns.db.minProfit or 0) or 0
 	self.oneShot = true
 	self.token = self.token + 1
 	self.running = true
@@ -162,6 +178,18 @@ function Scanner:Refresh(entry)
 	self.infoActivity = GetTime()
 	self.waiting = nil
 	self.driver:Show()
+end
+
+-- The client only buys an auction it holds search results for, and it holds
+-- them only for the item searched last. Loads the entry's auctions so that a
+-- Buy click can go through; the row shows '...' meanwhile.
+function Scanner:Load(entry)
+	if entry.loading then return end
+	entry.loading = true
+	ns.Debug('loading the auctions of ' .. (entry.link or entry.itemID))
+	-- upgrade rows come from their own lookup, which a refresh would confuse
+	self:Refresh(entry, entry.slot ~= nil or self.mode == 'upgrade' and self.running)
+	if ns.UI then ns.UI:MarkDirty() end
 end
 
 function Scanner:BeginPass()
@@ -227,6 +255,9 @@ function Scanner:Tick()
 	end
 
 	if ns.Buyer:IsBusy() then return end
+	-- another query would unload the auctions of the Buy button under the cursor
+	local hover = ns.UI and ns.UI.hoverEntry
+	if hover and ns.Buyer:FindLoaded(hover) then return end
 	if now - self.lastSent < (ns.db.delay or 1) then return end
 	if not AH.IsThrottledMessageSystemReady() then return end
 
@@ -238,6 +269,7 @@ function Scanner:Abandon()
 	local waiting = self.waiting
 	self.waiting = nil
 	if not waiting then return end
+	Loaded(waiting.candidate)
 	if waiting.kind == 'browse' or waiting.kind == 'browseMore' then
 		self.browseOpen = false
 		return
@@ -287,7 +319,8 @@ function Scanner:Next(now)
 
 	-- 2. the next candidate; upgrade candidates wait until browsing is done
 	-- (step 6), so that they can be checked best first
-	local candidate = self.mode ~= 'upgrade' and table.remove(self.queue, 1)
+	local first = self.queue[1]
+	local candidate = (self.mode ~= 'upgrade' or (first and first.loadOnly)) and table.remove(self.queue, 1)
 	if candidate then
 		self:Wait('detail', candidate)
 		local info = AH.GetItemKeyInfo(candidate.itemKey)
@@ -411,7 +444,9 @@ function Scanner:EvaluateVendor(result, retried)
 	local itemID = result.itemKey.itemID
 	local sellPrice = select(11, C_Item.GetItemInfo(itemID))
 	if sellPrice then
-		if sellPrice > 0 and result.minPrice < sellPrice then
+		-- the most it can make: every unit at the lowest price
+		local best = (sellPrice - result.minPrice) * (result.totalQuantity or 0)
+		if sellPrice > 0 and result.minPrice < sellPrice and best >= self.minProfit then
 			self:AddCandidate(result, sellPrice, sellPrice - 1)
 		end
 		return
@@ -474,6 +509,7 @@ function Scanner:TakeDetail(itemID)
 	if waiting.kind ~= 'detail' and waiting.kind ~= 'detailMore' then return end
 	if waiting.candidate.itemKey.itemID ~= itemID then return end
 	self.waiting = nil
+	Loaded(waiting.candidate)
 	return waiting
 end
 
@@ -487,9 +523,29 @@ end
 
 function Scanner:OnItemResults(itemKey)
 	local waiting = self:TakeDetail(itemKey.itemID)
-	if not waiting then return end
+	if not waiting then
+		-- not asked for by the scan, but the listed rows may need the new IDs
+		Results:SyncItem(itemKey)
+		return
+	end
 	local candidate = waiting.candidate
 	itemKey = candidate.itemKey
+
+	if candidate.loadOnly then
+		-- the client holds the auctions now; only check the row's one is among them
+		local entry = candidate.entry
+		local result = ns.Buyer:FindLoaded(entry)
+		if not result and AH.HasFullItemSearchResults(itemKey) then
+			Results:MarkGone(entry)
+		elseif result and result.buyoutAmount then
+			if result.buyoutAmount > entry.limit then
+				Results:MarkGone(entry)
+			else
+				entry.buyout = result.buyoutAmount
+			end
+		end
+		return
+	end
 
 	if self.mode == 'upgrade' then
 		-- sorted by buyout: the first buyable auction is the cheapest, and all
@@ -532,6 +588,9 @@ function Scanner:OnItemResults(itemKey)
 				end
 				if buyout <= limit then
 					lastOpen = true
+				end
+				local profit = vendor and (vendor - buyout) * quantity or 0
+				if buyout <= limit and (self.mode ~= 'vendor' or profit >= self.minProfit) then
 					found[#found + 1] = {
 						auctionID = result.auctionID,
 						itemID = itemKey.itemID,
@@ -576,6 +635,15 @@ function Scanner:OnCommodityResults(itemID)
 		end
 	end
 	table.sort(tiers, function(a, b) return a.price < b.price end)
+
+	-- buying fewer units only makes less, so it is all the tiers or nothing
+	if self.mode == 'vendor' and candidate.vendor then
+		local profit = 0
+		for _, tier in ipairs(tiers) do
+			profit = profit + (candidate.vendor - tier.price) * tier.qty
+		end
+		if profit < self.minProfit then wipe(tiers) end
+	end
 
 	Results:SetCommodity(self.mode, candidate.key, {
 		itemID = itemID,

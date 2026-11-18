@@ -9,7 +9,8 @@ local _, ns = ...
 -- Shared fields: key (item key string), itemKey, itemID, link, limit (highest
 -- acceptable unit price), vendor (vendor sell price, vendor mode only),
 -- unit (lowest unit price), profit, pass (last scan pass that confirmed it)
--- and gone (sold, expired or bought; shown greyed until the list compacts).
+-- gone (sold, expired or bought; kept greyed at the bottom of the list),
+-- bought (gone because it was bought here) and found (order of discovery).
 -- Upgrade mode keeps one 'item' entry per equipment slot, which also carries
 -- slot, slotLabel, order, score, gain, equippedLink and equippedScore.
 local Results = {
@@ -17,8 +18,32 @@ local Results = {
 }
 ns.Results = Results
 
+-- how many gone rows a list keeps below the live ones
+local MAX_GONE = 100
+
+-- increasing numbers that order rows by when they were found or went gone
+local serial = 0
+local function NextSerial()
+	serial = serial + 1
+	return serial
+end
+
 local function Changed()
 	if ns.UI then ns.UI:MarkDirty() end
+end
+
+-- Adds a new row where Compact would put it: on top. While rows are held
+-- (a click may be about to land), on top would push the row under the cursor
+-- away, so it goes below the last live row instead and moves up later.
+local function Insert(list, entry)
+	local position = 1
+	if ns.UI and ns.UI.list and ns.UI:HoldsRows() then
+		position = #list + 1
+		while position > 1 and list[position - 1].gone do
+			position = position - 1
+		end
+	end
+	table.insert(list, position, entry)
 end
 
 function Results:List(mode)
@@ -94,8 +119,10 @@ local function SameLot(entry, auction)
 end
 
 -- Replaces the auctions listed for one item key with `found`. Auctions that
--- are still up keep their entry (and their place in the list). A row that was
--- bought from (spent) carries on with the next auction of the same lot.
+-- are still up keep their entry (and their place in the list). A row whose
+-- auction ID is gone carries on with an auction of the same lot: the server
+-- hands a lot a new ID when one of it is bought. Rows that were bought from
+-- (spent) are matched first.
 function Results:SetAuctions(mode, key, found, pass)
 	local list = self.lists[mode]
 	local existing = {}
@@ -129,21 +156,20 @@ function Results:SetAuctions(mode, key, found, pass)
 	end
 
 	for _, auction in ipairs(fresh) do
-		local adopted
+		local adopted, adoptedID
 		for auctionID, entry in pairs(existing) do
-			if entry.spent and SameLot(entry, auction) then
-				adopted = entry
-				existing[auctionID] = nil
-				break
+			if SameLot(entry, auction) and (not adopted or entry.spent) then
+				adopted, adoptedID = entry, auctionID
 			end
 		end
+		if adopted then existing[adoptedID] = nil end
 		if adopted then
 			Apply(adopted, auction)
 		else
 			local entry = { kind = 'item', key = key, itemID = auction.itemID, itemKey = auction.itemKey,
-				link = auction.link }
+				link = auction.link, found = NextSerial() }
 			Apply(entry, auction)
-			list[#list + 1] = entry
+			Insert(list, entry)
 		end
 	end
 
@@ -153,11 +179,57 @@ function Results:SetAuctions(mode, key, found, pass)
 	Changed()
 end
 
+-- The client's auctions of an item changed without the scanner asking for
+-- them, e.g. after a purchase. Rows whose auction ID is no longer among them
+-- move to the same lot's new ID, since a Buy with the old one is dropped.
+-- Nothing is marked gone here; a reload settles that.
+function Results:SyncItem(itemKey)
+	local AH = C_AuctionHouse
+	if not (itemKey and AH.HasSearchResults(itemKey)) then return end
+	local results, held = {}, {}
+	for index = 1, AH.GetNumItemSearchResults(itemKey) do
+		local result = AH.GetItemSearchResultInfo(itemKey, index)
+		if result and result.buyoutAmount and not result.containsOwnerItem and not result.containsAccountItem then
+			results[#results + 1] = result
+			held[result.auctionID] = true
+		end
+	end
+
+	local lost = {}
+	for _, entry in ipairs(self.lists[ns.db.mode]) do
+		if entry.kind == 'item' and entry.itemID == itemKey.itemID and not entry.gone and entry.auctionID then
+			if held[entry.auctionID] then
+				held[entry.auctionID] = 'taken'
+			else
+				lost[#lost + 1] = entry
+			end
+		end
+	end
+
+	local changed = false
+	for _, entry in ipairs(lost) do
+		for _, result in ipairs(results) do
+			if held[result.auctionID] == true and result.buyoutAmount == entry.buyout
+				and result.itemLink == entry.link then
+				held[result.auctionID] = 'taken'
+				ns.Debug(('lot moved from auction %d to %d'):format(entry.auctionID, result.auctionID))
+				entry.auctionID = result.auctionID
+				entry.quantity = math.max(result.quantity or 1, 1)
+				UpdateAuctionTotals(entry)
+				changed = true
+				break
+			end
+		end
+	end
+	if changed then Changed() end
+end
+
 -- One item of a lot was bought. A lot is a group of identical auctions that
 -- the server shows as one row, and every purchase takes one of them, so what
 -- is left has to be looked up again before the row can be bought from.
 function Results:TakeOne(entry)
 	entry.quantity = entry.quantity - 1
+	entry.bought = true -- only shows once the row is gone
 	-- one upgrade per slot is all that is wanted
 	if entry.quantity <= 0 or entry.slot then
 		entry.gone = true
@@ -200,8 +272,8 @@ function Results:SetUpgrade(slot, data, pass)
 		entry = nil
 	end
 	if not entry then
-		entry = { kind = 'item' }
-		table.insert(self.lists.upgrade, entry)
+		entry = { kind = 'item', found = NextSerial() }
+		Insert(self.lists.upgrade, entry)
 	end
 	for field, value in pairs(data) do
 		entry[field] = value
@@ -225,8 +297,9 @@ function Results:SetCommodity(mode, key, data, pass)
 
 	if data and #data.tiers > 0 then
 		if not entry then
-			entry = { kind = 'commodity', key = key, itemID = data.itemID, itemKey = data.itemKey }
-			list[#list + 1] = entry
+			entry = { kind = 'commodity', key = key, itemID = data.itemID, itemKey = data.itemKey,
+				found = NextSerial() }
+			Insert(list, entry)
 		end
 		entry.tiers = data.tiers
 		entry.limit = data.limit
@@ -249,6 +322,7 @@ function Results:Consume(entry, quantity)
 		remaining = remaining - take
 		if tier.qty <= 0 then table.remove(entry.tiers, 1) end
 	end
+	entry.bought = true
 	entry.qtyEdited = false
 	UpdateCommodityTotals(entry)
 	Changed()
@@ -280,17 +354,14 @@ function Results:EndPass(mode, pass)
 	if changed then Changed() end
 end
 
+local function NewestFirst(a, b)
+	return a.found > b.found
+end
+
+-- order of the live rows
 local comparators = {
-	-- best total profit first
-	vendor = function(a, b)
-		if a.profit ~= b.profit then return a.profit > b.profit end
-		return a.unit < b.unit
-	end,
-	-- cheapest first
-	search = function(a, b)
-		if a.unit ~= b.unit then return a.unit < b.unit end
-		return a.quantity > b.quantity
-	end,
+	vendor = NewestFirst,
+	search = NewestFirst,
 	-- in equipment slot order
 	upgrade = function(a, b)
 		if a.order ~= b.order then return a.order < b.order end
@@ -298,20 +369,27 @@ local comparators = {
 	end,
 }
 
--- Drops gone entries and re-sorts. This moves rows around, so the UI only
--- calls it while the mouse is away from the list.
+-- Re-sorts: live rows on top, gone ones below them (the latest to go first),
+-- and drops the oldest gone rows past MAX_GONE. This moves rows around, so
+-- the UI only calls it while no click is about to land (UI:HoldsRows).
 function Results:Compact(mode)
 	local list = self.lists[mode]
-	local kept = 0
-	for index = 1, #list do
-		local entry = list[index]
-		if not entry.gone then
-			kept = kept + 1
-			list[kept] = entry
+	for _, entry in ipairs(list) do
+		if entry.gone and not entry.goneOrder then
+			entry.goneOrder = NextSerial()
 		end
 	end
-	for index = #list, kept + 1, -1 do
-		list[index] = nil
+	local live = comparators[mode]
+	table.sort(list, function(a, b)
+		if (a.gone or false) ~= (b.gone or false) then return not a.gone end
+		if a.gone then return a.goneOrder > b.goneOrder end
+		return live(a, b)
+	end)
+	local gone = 0
+	for index = 1, #list do
+		if list[index].gone then gone = gone + 1 end
 	end
-	table.sort(list, comparators[mode])
+	for _ = MAX_GONE + 1, gone do
+		list[#list] = nil
+	end
 end

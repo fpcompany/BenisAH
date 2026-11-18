@@ -16,6 +16,7 @@ local defaults = {
 	delay = 1, -- seconds between server queries, on top of the server throttle
 	mode = 'vendor', -- 'vendor' (below vendor price), 'search' (name + max price) or 'upgrade'
 	skipCategories = {}, -- [category name] = true for categories left out of the vendor scan
+	minProfit = 0, -- copper; vendor mode drops lots whose total profit is lower
 	searchName = '',
 	searchMax = 0, -- copper, per unit
 	exactMatch = false,
@@ -32,6 +33,12 @@ ns.MIN_DELAY, ns.MAX_DELAY = 0.2, 60
 
 function ns.Print(...)
 	print(ns.TITLE .. ':', ...)
+end
+
+function ns.Debug(...)
+	if ns.db and ns.db.debug then
+		print('|cff1784d1BenisAH|r |cff999999debug:|r', ...)
+	end
 end
 
 function ns.Money(copper)
@@ -91,9 +98,13 @@ SlashCmdList.BENISAH = function(msg)
 		if ns.UI and ns.UI.panel then ns.UI:LoadSettings() end
 	elseif cmd == 'stop' then
 		ns.Scanner:Stop()
+	elseif cmd == 'debug' then
+		ns.db.debug = not ns.db.debug or nil
+		ns.Print('purchase debug log ' .. (ns.db.debug and 'on' or 'off') .. '.')
 	else
 		ns.Print('open the auction house and pick the BenisAH tab.')
 		ns.Print('/bah delay <seconds> - pause between server queries')
 		ns.Print('/bah stop - stop a running scan')
+		ns.Print('/bah debug - log what happens on every purchase')
 	end
 end

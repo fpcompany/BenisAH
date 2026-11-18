@@ -18,15 +18,16 @@ local UPDATE_INTERVAL = 0.1
 
 -- column layout of the list: x offset of the column's right edge, and width
 local COLUMNS = {
-	{ key = 'avail', label = 'Avail', right = 250, width = 36 },
-	{ key = 'each', label = 'Each', right = 335, width = 82 },
-	{ key = 'limit', label = 'Vendor', right = 420, width = 82 },
-	{ key = 'total', label = 'Total', right = 505, width = 82 },
-	{ key = 'profit', label = 'Profit', right = 590, width = 82 },
+	{ key = 'avail', label = 'Avail', right = 226, width = 36 },
+	{ key = 'each', label = 'Each', right = 311, width = 82 },
+	{ key = 'limit', label = 'Vendor', right = 396, width = 82 },
+	{ key = 'total', label = 'Total', right = 481, width = 82 },
+	{ key = 'profit', label = 'Profit', right = 566, width = 82 },
 }
-local NAME_LEFT, NAME_WIDTH = 30, 180
-local QTY_LEFT, QTY_WIDTH = 604, 40
-local BUY_LEFT, BUY_WIDTH = 650, 56
+local NAME_LEFT, NAME_WIDTH = 30, 156
+local QTY_LEFT, QTY_WIDTH = 580, 40
+local BUY_LEFT, BUY_WIDTH = 626, 56
+local REFRESH_LEFT, REFRESH_WIDTH = 684, 22
 local VIEW_LEFT, VIEW_WIDTH = 708, 50
 
 local HINTS = {
@@ -138,6 +139,7 @@ function UI:SaveSettings()
 	end
 	db.searchName = strtrim(self.nameBox:GetText() or '')
 	db.searchMax = self.maxPrice:GetCopper()
+	db.minProfit = self.minProfit:GetCopper()
 	db.exactMatch = self.exactCheck:GetChecked() and true or false
 	db.upgradeMax = self.upgradeMaxPrice:GetCopper()
 	self.delayBox:SetText(('%.1f'):format(db.delay))
@@ -148,6 +150,7 @@ function UI:LoadSettings()
 	self.delayBox:SetText(('%.1f'):format(db.delay))
 	self.nameBox:SetText(db.searchName or '')
 	self.maxPrice:SetCopper(db.searchMax or 0)
+	self.minProfit:SetCopper(db.minProfit or 0)
 	self.exactCheck:SetChecked(db.exactMatch)
 	self.upgradeMaxPrice:SetCopper(db.upgradeMax or 0)
 	self:UpdateUpgradeMaxLabel()
@@ -159,6 +162,7 @@ function UI:ClearFocus()
 	self.delayBox:ClearFocus()
 	self.nameBox:ClearFocus()
 	self.maxPrice:ClearFocus()
+	self.minProfit:ClearFocus()
 	self.upgradeMaxPrice:ClearFocus()
 	if self.options then self.options:ClearFocus() end
 end
@@ -239,7 +243,7 @@ function UI:SetMode(mode)
 	self.vendorCheck:SetChecked(mode == 'vendor')
 	self.searchCheck:SetChecked(mode == 'search')
 	self.upgradeCheck:SetChecked(mode == 'upgrade')
-	self.categoryButton:SetShown(mode == 'vendor')
+	self.vendorOptions:SetShown(mode == 'vendor')
 	self.searchOptions:SetShown(mode == 'search')
 	self.upgradeOptions:SetShown(mode == 'upgrade')
 	if mode ~= 'upgrade' and self.options then self.options:Hide() end
@@ -290,6 +294,12 @@ local function Row_UpdateNumbers(row)
 	row.avail:SetText(entry.quantity)
 	row.each:SetText(ns.Money(entry.unit))
 	row.limit:SetText(ns.Money(vendorMode and entry.vendor or entry.limit))
+	if entry.gone then
+		-- nothing left to buy: no total, no profit on offer
+		row.total:SetText('')
+		row.profit:SetText('')
+		return
+	end
 	row.total:SetText(ns.Money(total))
 	if vendorMode and entry.vendor then
 		row.profit:SetText(ns.Money(entry.vendor * count - total))
@@ -306,9 +316,9 @@ local function Row_UpdateButton(row)
 		text = 'Buy 1' -- one item of the lot per click
 	end
 	if entry.gone then
-		text, enabled = 'Gone', false
-	elseif entry.spent then
-		text, enabled = '...', false -- looking up the lot's next auction
+		text, enabled = entry.bought and 'Bought' or 'Gone', false
+	elseif entry.spent or entry.loading then
+		text, enabled = '...', false -- looking up the lot's next auction, or loading the item
 	elseif pending and pending.entry == entry then
 		if pending.state == 'confirm' then
 			text = 'Confirm'
@@ -320,6 +330,9 @@ local function Row_UpdateButton(row)
 	end
 	row.buy:SetText(text)
 	row.buy:SetEnabled(enabled)
+	-- upgrade rows are kept up to date by the scan itself
+	row.refresh:SetShown(not entry.slot)
+	row.refresh:SetEnabled(not (entry.gone or entry.spent))
 end
 
 local function Row_SetEntry(row, entry)
@@ -447,6 +460,39 @@ local function CreateRow(parent, index)
 		row.qty:ClearFocus()
 		Buyer:Buy(entry, entry.buyQty)
 	end)
+	-- Get the item's auctions loaded while the cursor is on its way to click,
+	-- and hold the scan meanwhile (see Scanner:Tick).
+	row.buy:SetScript('OnEnter', function()
+		local entry = row.entry
+		UI.hoverEntry = entry
+		if entry and entry.kind == 'item' and not (entry.gone or entry.spent or entry.loading)
+			and not Buyer.pending and not Buyer:FindLoaded(entry) then
+			Scanner:Load(entry)
+		end
+	end)
+	row.buy:SetScript('OnLeave', function() UI.hoverEntry = nil end)
+
+	-- looks up this item's auctions again, ahead of the scan
+	row.refresh = CreateButton(row, '', REFRESH_WIDTH)
+	row.refresh:SetHeight(20)
+	row.refresh:SetPoint('LEFT', REFRESH_LEFT, 0)
+	local refreshIcon = row.refresh:CreateTexture(nil, 'OVERLAY')
+	refreshIcon:SetTexture('Interface\\Buttons\\UI-RefreshButton')
+	refreshIcon:SetSize(12, 12)
+	refreshIcon:SetPoint('CENTER')
+	row.refresh:SetScript('OnClick', function()
+		local entry = row.entry
+		if not entry or entry.gone or entry.spent then return end
+		row.qty:ClearFocus()
+		UI:RefreshEntry(entry)
+	end)
+	row.refresh:SetScript('OnEnter', function(button)
+		GameTooltip:SetOwner(button, 'ANCHOR_RIGHT')
+		GameTooltip:SetText('Refresh')
+		GameTooltip:AddLine('Looks up the auctions of this item again. The amount to buy is reset to what is available.', 1, 1, 1, true)
+		GameTooltip:Show()
+	end)
+	row.refresh:SetScript('OnLeave', function() GameTooltip:Hide() end)
 
 	-- opens the item in Blizzard's Buy tab
 	row.view = CreateButton(row, 'View', VIEW_WIDTH)
@@ -465,6 +511,14 @@ local function CreateRow(parent, index)
 
 	row:Hide()
 	return row
+end
+
+function UI:RefreshEntry(entry)
+	-- the buy amount follows the fresh supply again
+	entry.qtyEdited = false
+	ns.db.minProfit = self.minProfit:GetCopper()
+	Scanner:Refresh(entry)
+	self:UpdateStatus()
 end
 
 --------------------------------------------------------------------------------
@@ -539,6 +593,17 @@ function UI:MarkDirty()
 	self.dirty = true
 end
 
+-- Rows must not move under a cursor that is about to click a button or while
+-- an amount is being typed. Elsewhere over the list they may.
+function UI:HoldsRows()
+	for _, row in ipairs(self.rows) do
+		if row.qty:HasFocus() then return true end
+	end
+	if not self.list:IsMouseOver() then return false end
+	local x = GetCursorPosition() / self.list:GetEffectiveScale()
+	return x >= self.list:GetLeft() + QTY_LEFT
+end
+
 function UI:Render()
 	if self.rendering then return end
 	self.rendering = true
@@ -576,6 +641,14 @@ function UI:UpdateStatus()
 		self.status:SetText('')
 	end
 	self.scanButton:SetText(Scanner.running and 'Stop' or 'Scan')
+
+	local session = Buyer.session
+	if session.count > 0 then
+		self.sessionText:SetText(('This session: |cff40ff40%s|r profit, %d bought for %s'):format(
+			ns.Money(session.profit), session.count, ns.Money(session.spent)))
+	else
+		self.sessionText:SetText('')
+	end
 end
 
 function UI:OnUpdate(elapsed)
@@ -584,9 +657,8 @@ function UI:OnUpdate(elapsed)
 	self.sinceUpdate = 0
 
 	if self.dirty then
-		-- Dropping sold entries and re-sorting moves rows, which must not happen
-		-- under a cursor that is about to click Buy: wait until it left the list.
-		if not self.list:IsMouseOver() then
+		-- Dropping sold entries and re-sorting moves rows: see HoldsRows.
+		if not self:HoldsRows() then
 			Results:Compact(ns.db.mode)
 			self.dirty = false
 		end
@@ -639,9 +711,19 @@ function UI:BuildPanel()
 	delayLabel:SetPoint('RIGHT', self.delayBox, 'LEFT', -10, 0)
 
 	-- line 2: options of the mode, status
-	self.categoryButton = CreateButton(panel, 'Categories', 150)
-	self.categoryButton:SetPoint('TOPLEFT', LEFT, -34)
+	local vendor = CreateFrame('Frame', nil, panel)
+	vendor:SetPoint('TOPLEFT', LEFT, -34)
+	vendor:SetSize(400, 22)
+	self.vendorOptions = vendor
+
+	self.categoryButton = CreateButton(vendor, 'Categories', 150)
+	self.categoryButton:SetPoint('LEFT', 0, 0)
 	self.categoryButton:SetScript('OnClick', function() UI:ShowCategoryMenu() end)
+
+	local minProfitLabel = CreateLabel(vendor, 'Min profit')
+	minProfitLabel:SetPoint('LEFT', self.categoryButton, 'RIGHT', 14, 0)
+	self.minProfit = CreateMoneyInput(vendor, function(copper) ns.db.minProfit = copper end)
+	self.minProfit:SetPoint('LEFT', minProfitLabel, 'RIGHT', 4, 0)
 
 	local options = CreateFrame('Frame', nil, panel)
 	options:SetPoint('TOPLEFT', LEFT, -34)
@@ -685,6 +767,11 @@ function UI:BuildPanel()
 	self.upgradeMaxLabel:SetPoint('LEFT', self.optionsButton, 'RIGHT', 14, 0)
 	self.upgradeMaxPrice = CreateMoneyInput(upgrade)
 	self.upgradeMaxPrice:SetPoint('LEFT', self.upgradeMaxLabel, 'RIGHT', 4, 0)
+
+	-- below the list, right of the auction house's own money display
+	self.sessionText = CreateLabel(panel, '', 'GameFontHighlightSmall')
+	self.sessionText:SetPoint('TOPRIGHT', panel, 'BOTTOMRIGHT', -6, -8)
+	self.sessionText:SetJustifyH('RIGHT')
 
 	self.status = CreateLabel(panel, '', 'GameFontHighlightSmall')
 	self.status:SetPoint('TOPRIGHT', -6, -39)
@@ -749,6 +836,7 @@ function UI:BuildPanel()
 	-- Leaving the tab (or closing the auction house) ends the scan: its queries
 	-- would overwrite whatever the other tabs are browsing.
 	panel:SetScript('OnHide', function()
+		UI.hoverEntry = nil
 		Scanner:Stop()
 		Buyer:Cancel()
 		UI:ClearFocus()
