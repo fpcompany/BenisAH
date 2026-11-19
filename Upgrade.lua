@@ -99,11 +99,27 @@ local scanTip = CreateFrame('GameTooltip', 'BenisAHScanTooltip', nil, 'GameToolt
 
 -- the sell price the tooltip shows, see SellPrice
 local tooltipMoney
--- newer clients dropped this script; SellPrice then falls back to the repair cost
+-- Old tooltips report their money line through this script. Modern ones
+-- (Forever, Midnight) dropped it and are read through C_TooltipInfo instead.
 if scanTip:HasScript('OnTooltipAddMoney') then
-	scanTip:HookScript('OnTooltipAddMoney', function(_, money)
+	pcall(scanTip.HookScript, scanTip, 'OnTooltipAddMoney', function(_, money)
 		tooltipMoney = money
 	end)
+end
+
+-- the sell price line of an equipped item's tooltip data, on modern clients
+local function TooltipInfoSellPrice(invSlot)
+	if not (C_TooltipInfo and C_TooltipInfo.GetInventoryItem
+		and Enum.TooltipDataLineType and Enum.TooltipDataLineType.SellPrice) then
+		return nil
+	end
+	local ok, data = pcall(C_TooltipInfo.GetInventoryItem, 'player', invSlot)
+	if not ok or not data or not data.lines then return nil end
+	for _, line in ipairs(data.lines) do
+		if line.type == Enum.TooltipDataLineType.SellPrice and line.price then
+			return line.price
+		end
+	end
 end
 
 -- What a vendor pays for an equipped item right now. A damaged item sells for
@@ -111,6 +127,8 @@ end
 -- tooltip, which shows the real one. Failing that, the repair cost comes off.
 local function SellPrice(invSlot, link)
 	local base = select(11, C_Item.GetItemInfo(link)) or 0
+	local price = TooltipInfoSellPrice(invSlot)
+	if price then return price end
 	tooltipMoney = nil
 	scanTip:SetOwner(WorldFrame, 'ANCHOR_NONE')
 	scanTip:ClearLines()
