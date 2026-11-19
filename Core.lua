@@ -30,7 +30,9 @@ local defaults = {
 	upgradeSellLimit = false, -- the limit is the sell price of the equipped item, plus upgradeMax
 	upgradeMaxLevel = 0, -- highest required level; 0 = the character's level
 	upgradeArmor = 'auto', -- 'auto', 'cloth', 'leather', 'mail' or 'plate'
-	weights = {}, -- [stat key] = weight, filled from the presets in Upgrade.lua
+	weights = {}, -- [stat key] = weight, filled from the presets in Presets.lua
+	weightPreset = false, -- key of the last preset applied (Presets.lua)
+	weaponChoice = false, -- last weapon button: 'slow', 'fast', 'any' or 'none'
 }
 
 ns.MIN_DELAY, ns.MAX_DELAY = 0.2, 60

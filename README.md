@@ -64,13 +64,42 @@ it sells for now, so repairing it raises the limit.
 - Items up to your level are searched. **Max required level** in
   **Weights & options** raises that limit, for example to plan ahead.
 
+- On WoW Forever, **Ranged** is searched too: bows, guns, crossbows, thrown
+  weapons and wands, whichever your class can use.
+
 An item's score is each stat times its weight, plus weapon DPS times the DPS
-weight, plus (speed - 2.0) times the speed weight, so slow weapons win at a
-similar DPS. The **Score** column shows the new item's score and **Gain**
-shows how much it adds. Hover the item to see what it replaces. The weights
-start at an Enhancement Shaman preset (weapon DPS, then Hit, Expertise,
-Strength, Intellect and Spell Power), and you can edit them or reset them to
-that preset. Changes apply from the next pass.
+weight, plus (speed - 2.0) times the speed weight. Melee weapons use **Weapon
+DPS** and ranged weapons and wands use **Ranged/wand DPS**. Wands get no speed
+bonus. The **Score** column shows the new item's score and **Gain** shows how
+much it adds. Hover the item to see what it replaces. Changes apply from the
+next pass.
+
+**Preset** in **Weights & options** fills every weight for one spec. Your own
+class's specs are at the top of the menu and the other classes are in
+submenus. The numbers are WoWSims Forever pre-raid stat weights from
+[wowforeverbislist.com](https://wowforeverbislist.com/stat-priority/)
+(November 2026). Holy Paladin, Restoration Shaman and Restoration Druid use
+that site's own estimates. Hit, crit, haste and expertise are converted to
+weights per rating point (10 hit, 14 crit, 10 haste and 10 expertise rating per
+1% at level 60). The haste and expertise figures are assumed, because no source
+publishes them. Caps are not modeled, so lower the hit, expertise or defense
+weights yourself once you reach a cap. Casters and healers weigh spell power
+or healing power, never both. The button shows **(edited)** once you change a
+weight.
+
+No source gives a value for weapon DPS. The presets use 14 per DPS for each
+point of attack power the spec is worth, since 14 attack power add 1 DPS.
+Casters, healers and druids get 0, because druid forms ignore the weapon.
+Casters who can use wands get 1 per wand DPS. The **Weapon** buttons set DPS and
+speed:
+
+- **Slow**: each second of speed over 2.0 is worth 1.5 DPS, so slow weapons
+  win. This is the default for two-handers and the melee specs that want a
+  slow main hand, and for hunter bows.
+- **Fast**: the same weight with the sign flipped, so fast weapons win.
+- **Any speed**: only DPS and stats count.
+- **Ignore**: weapon DPS and speed count for nothing and only stats count.
+  Ranged/wand DPS is kept.
 
 Items with a random suffix ("of the Bear") or another item level have to be
 looked up one by one, so the first pass takes longer. Later passes reuse what

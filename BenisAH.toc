@@ -12,6 +12,7 @@
 Core.lua
 Results.lua
 Upgrade.lua
+Presets.lua
 Scanner.lua
 Buyer.lua
 UI.lua

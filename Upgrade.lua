@@ -25,6 +25,10 @@ ns.Upgrade = Upgrade
 
 local EPSILON = 0.001
 local BASE_SPEED = 2.0 -- weapons slower than this get a bonus, faster ones a malus
+local WEAPON_CLASS = 2
+local WAND_SUBCLASS = 19
+-- bow, gun, thrown, crossbow, wand: scored with the ranged DPS weight
+local RANGED_SUBCLASSES = { [2] = true, [3] = true, [16] = true, [18] = true, [19] = true }
 
 local GetItemStats = C_Item and C_Item.GetItemStats or GetItemStats
 local GetItemInfoInstant = C_Item and C_Item.GetItemInfoInstant or GetItemInfoInstant
@@ -34,46 +38,62 @@ local GetItemInfoInstant = C_Item and C_Item.GetItemInfoInstant or GetItemInfoIn
 --------------------------------------------------------------------------------
 
 -- `mods` are the keys GetItemStats uses for the stat; when an item has several
--- of them, the biggest counts. The presets follow an Enhancement Shaman guide:
--- weapon DPS first, then Hit, Expertise, Strength, Intellect, Spell Power.
+-- of them, the biggest counts. The per spec presets are in Presets.lua.
+-- Spell power counts items that raise damage and healing, or damage only;
+-- healing power counts items that raise healing, or damage and healing. So
+-- a healer weighs healing power and a caster spell power, never both.
 Upgrade.STATS = {
-	{ key = 'dps', label = 'Weapon DPS', preset = 7,
-		mods = { 'ITEM_MOD_DAMAGE_PER_SECOND_SHORT' } },
-	{ key = 'speed', label = 'Speed over 2.0s', preset = 10,
-		tip = 'Added per second of weapon speed above 2.0 (taken off below it), so slow weapons win at similar DPS.' },
-	{ key = 'hit', label = 'Hit', preset = 1.4,
-		mods = { 'ITEM_MOD_HIT_RATING_SHORT', 'ITEM_MOD_HIT_MELEE_RATING_SHORT', 'ITEM_MOD_HIT_SPELL_RATING_SHORT' } },
-	{ key = 'expertise', label = 'Expertise', preset = 1.3, mods = { 'ITEM_MOD_EXPERTISE_RATING_SHORT' } },
-	{ key = 'str', label = 'Strength', preset = 1, mods = { 'ITEM_MOD_STRENGTH_SHORT' } },
-	{ key = 'int', label = 'Intellect', preset = 0.85, mods = { 'ITEM_MOD_INTELLECT_SHORT' } },
-	{ key = 'sp', label = 'Spell power', preset = 0.7,
+	{ key = 'dps', label = 'Weapon DPS', mods = { 'ITEM_MOD_DAMAGE_PER_SECOND_SHORT' },
+		tip = 'DPS of melee weapons. Ranged weapons and wands use Ranged DPS.' },
+	{ key = 'rdps', label = 'Ranged/wand DPS',
+		tip = 'DPS of bows, guns, crossbows, thrown weapons and wands.' },
+	{ key = 'speed', label = 'Speed over 2.0s',
+		tip = 'Added per second of weapon speed above 2.0 (taken off below it), so slow weapons win at similar DPS. Wands do not count.' },
+	{ key = 'hit', label = 'Hit',
+		mods = { 'ITEM_MOD_HIT_RATING_SHORT', 'ITEM_MOD_HIT_MELEE_RATING_SHORT', 'ITEM_MOD_HIT_SPELL_RATING_SHORT',
+			'ITEM_MOD_HIT_RANGED_RATING_SHORT' } },
+	{ key = 'crit', label = 'Crit',
+		mods = { 'ITEM_MOD_CRIT_RATING_SHORT', 'ITEM_MOD_CRIT_MELEE_RATING_SHORT', 'ITEM_MOD_CRIT_SPELL_RATING_SHORT',
+			'ITEM_MOD_CRIT_RANGED_RATING_SHORT' } },
+	{ key = 'haste', label = 'Haste',
+		mods = { 'ITEM_MOD_HASTE_RATING_SHORT', 'ITEM_MOD_HASTE_MELEE_RATING_SHORT', 'ITEM_MOD_HASTE_SPELL_RATING_SHORT',
+			'ITEM_MOD_HASTE_RANGED_RATING_SHORT' } },
+	{ key = 'expertise', label = 'Expertise', mods = { 'ITEM_MOD_EXPERTISE_RATING_SHORT' } },
+	{ key = 'str', label = 'Strength', mods = { 'ITEM_MOD_STRENGTH_SHORT' } },
+	{ key = 'agi', label = 'Agility', mods = { 'ITEM_MOD_AGILITY_SHORT' } },
+	{ key = 'int', label = 'Intellect', mods = { 'ITEM_MOD_INTELLECT_SHORT' } },
+	{ key = 'spi', label = 'Spirit', mods = { 'ITEM_MOD_SPIRIT_SHORT' } },
+	{ key = 'sta', label = 'Stamina', mods = { 'ITEM_MOD_STAMINA_SHORT' } },
+	{ key = 'ap', label = 'Attack power',
+		mods = { 'ITEM_MOD_ATTACK_POWER_SHORT', 'ITEM_MOD_MELEE_ATTACK_POWER_SHORT',
+			'ITEM_MOD_RANGED_ATTACK_POWER_SHORT', 'ITEM_MOD_FERAL_ATTACK_POWER_SHORT' } },
+	{ key = 'arp', label = 'Armor pen.', mods = { 'ITEM_MOD_ARMOR_PENETRATION_RATING_SHORT' } },
+	{ key = 'sp', label = 'Spell power',
 		mods = { 'ITEM_MOD_SPELL_POWER_SHORT', 'ITEM_MOD_SPELL_DAMAGE_DONE_SHORT' } },
-	{ key = 'agi', label = 'Agility', preset = 0.6, mods = { 'ITEM_MOD_AGILITY_SHORT' } },
-	{ key = 'crit', label = 'Crit', preset = 0.6,
-		mods = { 'ITEM_MOD_CRIT_RATING_SHORT', 'ITEM_MOD_CRIT_MELEE_RATING_SHORT' } },
-	{ key = 'haste', label = 'Haste', preset = 0.5,
-		mods = { 'ITEM_MOD_HASTE_RATING_SHORT', 'ITEM_MOD_HASTE_MELEE_RATING_SHORT' } },
-	{ key = 'ap', label = 'Attack power', preset = 0.5,
-		mods = { 'ITEM_MOD_ATTACK_POWER_SHORT', 'ITEM_MOD_MELEE_ATTACK_POWER_SHORT' } },
-	{ key = 'pierce', label = 'Spell pierce', preset = 0.3, mods = { 'ITEM_MOD_SPELL_PENETRATION_SHORT' } },
-	{ key = 'sta', label = 'Stamina', preset = 0.05, mods = { 'ITEM_MOD_STAMINA_SHORT' } },
-	{ key = 'spi', label = 'Spirit', preset = 0, mods = { 'ITEM_MOD_SPIRIT_SHORT' } },
-	{ key = 'mp5', label = 'Mana per 5', preset = 0,
+	{ key = 'hp', label = 'Healing power',
+		mods = { 'ITEM_MOD_SPELL_HEALING_DONE_SHORT', 'ITEM_MOD_SPELL_POWER_SHORT' } },
+	{ key = 'pierce', label = 'Spell pierce', mods = { 'ITEM_MOD_SPELL_PENETRATION_SHORT' } },
+	{ key = 'mp5', label = 'Mana per 5',
 		mods = { 'ITEM_MOD_MANA_REGENERATION_SHORT', 'ITEM_MOD_POWER_REGEN0_SHORT' } },
-	{ key = 'armor', label = 'Armor', preset = 0, mods = { 'RESISTANCE0_NAME' } },
+	{ key = 'armor', label = 'Armor', mods = { 'RESISTANCE0_NAME' } },
+	{ key = 'def', label = 'Defense', mods = { 'ITEM_MOD_DEFENSE_SKILL_RATING_SHORT' } },
+	{ key = 'dodge', label = 'Dodge', mods = { 'ITEM_MOD_DODGE_RATING_SHORT' } },
+	{ key = 'parry', label = 'Parry', mods = { 'ITEM_MOD_PARRY_RATING_SHORT' } },
+	{ key = 'block', label = 'Block', mods = { 'ITEM_MOD_BLOCK_RATING_SHORT' } },
+	{ key = 'blockval', label = 'Block value', mods = { 'ITEM_MOD_BLOCK_VALUE_SHORT' } },
 }
 
--- fills in a preset for every weight the user has not set
+-- Fills in every weight the user has not set: from the default preset on a
+-- fresh install, 0 for a stat added since the weights were saved.
 function Upgrade:EnsureWeights()
 	local weights = ns.db.weights
-	for _, stat in ipairs(self.STATS) do
-		if type(weights[stat.key]) ~= 'number' then weights[stat.key] = stat.preset end
+	if next(weights) == nil then
+		self:ApplyPreset(self.DEFAULT_PRESET)
+		return
 	end
-end
-
-function Upgrade:ResetWeights()
-	wipe(ns.db.weights)
-	self:EnsureWeights()
+	for _, stat in ipairs(self.STATS) do
+		if type(weights[stat.key]) ~= 'number' then weights[stat.key] = 0 end
+	end
 end
 
 --------------------------------------------------------------------------------
@@ -179,16 +199,25 @@ function Upgrade:Score(link)
 	local stats = GetItemStats(link) or {}
 	local tip = ScanTooltip(link)
 	local weights = ns.db.weights
+	local _, _, _, _, _, classID, subClassID = GetItemInfoInstant(link)
+	local ranged = classID == WEAPON_CLASS and RANGED_SUBCLASSES[subClassID]
+	local wand = ranged and subClassID == WAND_SUBCLASS
+
+	local dps = tonumber(stats.ITEM_MOD_DAMAGE_PER_SECOND_SHORT) or 0
+	if dps == 0 then dps = tip.dps or 0 end
 	local score = 0
 	for _, stat in ipairs(self.STATS) do
 		local value = 0
-		for _, mod in ipairs(stat.mods or {}) do
-			value = math.max(value, tonumber(stats[mod]) or 0)
-		end
-		if stat.key == 'dps' and value == 0 then
-			value = tip.dps or 0
+		if stat.key == 'dps' then
+			value = ranged and 0 or dps
+		elseif stat.key == 'rdps' then
+			value = ranged and dps or 0
 		elseif stat.key == 'speed' then
-			value = tip.speed and (tip.speed - BASE_SPEED) or 0
+			value = (tip.speed and not wand) and (tip.speed - BASE_SPEED) or 0
+		else
+			for _, mod in ipairs(stat.mods or {}) do
+				value = math.max(value, tonumber(stats[mod]) or 0)
+			end
 		end
 		score = score + value * (weights[stat.key] or 0)
 	end
@@ -250,6 +279,17 @@ Upgrade.SLOTS = {
 	{ key = 'mainhand', label = 'Main hand', inv = { 16 }, hand = 'main' },
 	{ key = 'offhand', label = 'Off hand', inv = { 17 }, hand = 'off' },
 }
+-- Clients with a ranged slot (Forever) search it for bows, guns, crossbows,
+-- thrown weapons and wands; tooltips with red text drop what the class
+-- cannot use. Retail has no such slot and keeps ranged weapons in main hand.
+do
+	local ok, rangedSlot = pcall(GetInventorySlotInfo, 'RangedSlot')
+	if ok and rangedSlot == 18 then
+		Upgrade.SLOTS[#Upgrade.SLOTS + 1] = { key = 'ranged', label = 'Ranged', inv = { 18 },
+			filters = WeaponFilters(2, 3, 16, 18, 19),
+			locs = Set('INVTYPE_RANGED', 'INVTYPE_RANGEDRIGHT', 'INVTYPE_THROWN') }
+	end
+end
 for index, slot in ipairs(Upgrade.SLOTS) do slot.order = index end
 
 local function EquipLoc(invSlot)
