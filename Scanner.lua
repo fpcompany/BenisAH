@@ -10,6 +10,11 @@ local _, ns = ...
 -- which returns the real auctions. Candidates are checked before the next
 -- browse page is requested, so finds show up early.
 --
+-- Watch mode looks for one item by its exact name once (and again every
+-- WATCH_RESOLVE seconds, for item levels that showed up later), then skips the
+-- browse query: every pass is just the search query of each item key found,
+-- so a new cheap auction shows up after one round trip.
+--
 -- Only one query is ever in flight: the next one is sent once the previous
 -- answer arrived, the user's delay passed, the server throttle is ready and no
 -- purchase is pending.
@@ -26,6 +31,7 @@ local Results = ns.Results
 local RESPONSE_TIMEOUT = 8 -- seconds to wait for an answer before moving on
 local INFO_TIMEOUT = 4 -- seconds to wait for item data (vendor prices)
 local MAX_EXTRA_PAGES = 5 -- extra result pages requested per item
+local WATCH_RESOLVE = 60 -- seconds between browse queries in watch mode
 
 local BROWSE_SORTS = {
 	{ sortOrder = Enum.AuctionHouseSortOrder.Price, reverseSort = false },
@@ -95,7 +101,7 @@ function Scanner:Start(mode)
 		queries = ns.Upgrade:BeginPass()
 		if not queries then return false end
 		ns.Upgrade:Reset()
-	else
+	elseif mode == 'search' then
 		local name = strtrim(ns.db.searchName or '')
 		if name == '' then
 			ns.Print('enter an item name first.')
@@ -107,6 +113,20 @@ function Scanner:Start(mode)
 		end
 		queries[1] = { label = name, searchString = name, exact = ns.db.exactMatch }
 		self.maxPrice = ns.db.searchMax
+	elseif mode == 'watch' then
+		local name = strtrim(ns.db.watchName or '')
+		if name == '' then
+			ns.Print('enter an item name first.')
+			return false
+		end
+		if (ns.db.watchMax or 0) <= 0 then
+			ns.Print('enter a max price first.')
+			return false
+		end
+		self.watchQuery = { label = name, searchString = name, exact = true }
+		self.watchKeys = {} -- item keys of the watched item, in the order found
+		self.watchResolved = nil -- when the last browse query was sent
+		self.maxPrice = ns.db.watchMax
 	end
 
 	self.mode = mode
@@ -212,6 +232,23 @@ function Scanner:BeginPass()
 		end
 		self.queries = queries
 		self.maxPrice = ns.Upgrade.maxPrice -- per slot limits come from what is equipped
+	elseif self.mode == 'watch' and self.watchQuery and not self.oneShot then
+		self:BeginWatchPass()
+	end
+end
+
+-- Browses for the item when it is not known yet or a new look is due,
+-- otherwise queues a search query for every item key of it.
+function Scanner:BeginWatchPass()
+	local now = GetTime()
+	if #self.watchKeys == 0 or not self.watchResolved or now - self.watchResolved > WATCH_RESOLVE then
+		self.watchResolved = now
+		self.queries = { self.watchQuery }
+		return
+	end
+	self.queries = {}
+	for _, itemKey in ipairs(self.watchKeys) do
+		self.queue[#self.queue + 1] = { key = ns.KeyString(itemKey), itemKey = itemKey, limit = self.maxPrice }
 	end
 end
 
@@ -234,6 +271,12 @@ end
 function Scanner:GetStatus()
 	if not self.running then return nil end
 	if self.oneShot then return 'Refreshing' end
+	if self.mode == 'watch' then
+		local keys = #self.watchKeys
+		-- short: the name is in the box beside it
+		if keys == 0 then return 'Looking for it' end
+		return ('Check %d%s'):format(self.pass, keys > 1 and (' (%d items)'):format(keys) or '')
+	end
 	local query = self.queries[self.queryIndex]
 	return ('Pass %d: %s (%d/%d), %d to check'):format(self.pass, query and query.label or 'starting',
 		math.max(self.queryIndex, 1), #self.queries, self:QueueLength())
@@ -476,6 +519,11 @@ function Scanner:ProcessBrowse(results)
 					if result.minPrice <= self.maxPrice then
 						self:AddCandidate(result, nil, self.maxPrice)
 					end
+				elseif self.mode == 'watch' then
+					self:AddWatchKey(itemKey)
+					if result.minPrice <= self.maxPrice then
+						self.queue[#self.queue + 1] = { key = key, itemKey = itemKey, limit = self.maxPrice }
+					end
 				elseif self.mode == 'upgrade' then
 					if not isPet and result.minPrice <= self.maxPrice then
 						ns.Upgrade:Consider(result, self.queries[self.queryIndex])
@@ -486,6 +534,16 @@ function Scanner:ProcessBrowse(results)
 			end
 		end
 	end
+end
+
+function Scanner:AddWatchKey(itemKey)
+	local key = ns.KeyString(itemKey)
+	for _, known in ipairs(self.watchKeys) do
+		if ns.KeyString(known) == key then return end
+	end
+	self.watchKeys[#self.watchKeys + 1] = itemKey
+	ns.Debug(('watching item key %s (%s)'):format(key,
+		C_Item.GetItemInfo(itemKey.itemID) or 'name not loaded'))
 end
 
 function Scanner:OnBrowseResults(added)

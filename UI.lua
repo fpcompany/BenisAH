@@ -33,12 +33,14 @@ local VIEW_LEFT, VIEW_WIDTH = 708, 50
 local HINTS = {
 	vendor = 'Press Scan to look for auctions with a buyout below their vendor price.',
 	search = 'Enter an item name and the most you want to pay per item, then press Scan.',
+	watch = 'Enter the exact name of one item and the most you want to pay per item, then press Watch.',
 	upgrade = 'Pick the slots, set the most you want to pay, then press Scan.',
 }
 
 local HEADERS = {
 	vendor = { avail = 'Avail', each = 'Each', limit = 'Vendor', total = 'Total', profit = 'Profit' },
 	search = { avail = 'Avail', each = 'Each', limit = 'Max', total = 'Total', profit = '' },
+	watch = { avail = 'Avail', each = 'Each', limit = 'Max', total = 'Total', profit = '' },
 	upgrade = { avail = 'Avail', each = 'Slot', limit = 'Price', total = 'Score', profit = 'Gain' },
 }
 
@@ -141,6 +143,8 @@ function UI:SaveSettings()
 	db.searchMax = self.maxPrice:GetCopper()
 	db.minProfit = self.minProfit:GetCopper()
 	db.exactMatch = self.exactCheck:GetChecked() and true or false
+	db.watchName = strtrim(self.watchNameBox:GetText() or '')
+	db.watchMax = self.watchMaxPrice:GetCopper()
 	db.upgradeMax = self.upgradeMaxPrice:GetCopper()
 	self.delayBox:SetText(('%.1f'):format(db.delay))
 end
@@ -152,6 +156,9 @@ function UI:LoadSettings()
 	self.maxPrice:SetCopper(db.searchMax or 0)
 	self.minProfit:SetCopper(db.minProfit or 0)
 	self.exactCheck:SetChecked(db.exactMatch)
+	self.watchNameBox:SetText(db.watchName or '')
+	self.watchMaxPrice:SetCopper(db.watchMax or 0)
+	self.alertCheck:SetChecked(db.watchAlert)
 	self.upgradeMaxPrice:SetCopper(db.upgradeMax or 0)
 	self:UpdateUpgradeMaxLabel()
 	self:UpdateCategoryButton()
@@ -162,6 +169,8 @@ function UI:ClearFocus()
 	self.delayBox:ClearFocus()
 	self.nameBox:ClearFocus()
 	self.maxPrice:ClearFocus()
+	self.watchNameBox:ClearFocus()
+	self.watchMaxPrice:ClearFocus()
 	self.minProfit:ClearFocus()
 	self.upgradeMaxPrice:ClearFocus()
 	if self.options then self.options:ClearFocus() end
@@ -242,9 +251,11 @@ function UI:SetMode(mode)
 
 	self.vendorCheck:SetChecked(mode == 'vendor')
 	self.searchCheck:SetChecked(mode == 'search')
+	self.watchCheck:SetChecked(mode == 'watch')
 	self.upgradeCheck:SetChecked(mode == 'upgrade')
 	self.vendorOptions:SetShown(mode == 'vendor')
 	self.searchOptions:SetShown(mode == 'search')
+	self.watchOptions:SetShown(mode == 'watch')
 	self.upgradeOptions:SetShown(mode == 'upgrade')
 	if mode ~= 'upgrade' and self.options then self.options:Hide() end
 	for key, text in pairs(HEADERS[mode]) do
@@ -640,7 +651,7 @@ function UI:UpdateStatus()
 	else
 		self.status:SetText('')
 	end
-	self.scanButton:SetText(Scanner.running and 'Stop' or 'Scan')
+	self.scanButton:SetText(Scanner.running and 'Stop' or mode == 'watch' and 'Watch' or 'Scan')
 
 	local session = Buyer.session
 	if session.count > 0 then
@@ -690,8 +701,12 @@ function UI:BuildPanel()
 	self.searchCheck:SetPoint('LEFT', self.vendorCheck.label, 'RIGHT', 16, -1)
 	self.searchCheck:SetScript('OnClick', function() UI:SetMode('search') end)
 
+	self.watchCheck = CreateCheck(panel, 'Watch one item')
+	self.watchCheck:SetPoint('LEFT', self.searchCheck.label, 'RIGHT', 16, -1)
+	self.watchCheck:SetScript('OnClick', function() UI:SetMode('watch') end)
+
 	self.upgradeCheck = CreateCheck(panel, 'Upgrades')
-	self.upgradeCheck:SetPoint('LEFT', self.searchCheck.label, 'RIGHT', 16, -1)
+	self.upgradeCheck:SetPoint('LEFT', self.watchCheck.label, 'RIGHT', 16, -1)
 	self.upgradeCheck:SetScript('OnClick', function() UI:SetMode('upgrade') end)
 
 	self.scanButton = CreateButton(panel, 'Scan', 90)
@@ -707,7 +722,7 @@ function UI:BuildPanel()
 		box:HighlightText(0, 0)
 		UI:SaveSettings()
 	end)
-	local delayLabel = CreateLabel(panel, 'Delay between queries')
+	local delayLabel = CreateLabel(panel, 'Delay')
 	delayLabel:SetPoint('RIGHT', self.delayBox, 'LEFT', -10, 0)
 
 	-- line 2: options of the mode, status
@@ -746,6 +761,31 @@ function UI:BuildPanel()
 
 	self.exactCheck = CreateCheck(options, 'Exact name')
 	self.exactCheck:SetPoint('LEFT', self.maxPrice, 'RIGHT', 0, 0)
+
+	local watch = CreateFrame('Frame', nil, panel)
+	watch:SetPoint('TOPLEFT', LEFT, -34)
+	watch:SetSize(540, 22)
+	self.watchOptions = watch
+
+	local watchNameLabel = CreateLabel(watch, 'Exact name')
+	watchNameLabel:SetPoint('LEFT', 0, 0)
+	self.watchNameBox = CreateEditBox(watch, 130, false, 63)
+	self.watchNameBox:SetPoint('LEFT', watchNameLabel, 'RIGHT', 10, 0)
+	self.watchNameBox:SetScript('OnEnterPressed', function(box)
+		box:ClearFocus()
+		if not Scanner.running then UI:ToggleScan() end
+	end)
+
+	local watchMaxLabel = CreateLabel(watch, 'Max each')
+	watchMaxLabel:SetPoint('LEFT', self.watchNameBox, 'RIGHT', 14, 0)
+	self.watchMaxPrice = CreateMoneyInput(watch)
+	self.watchMaxPrice:SetPoint('LEFT', watchMaxLabel, 'RIGHT', 4, 0)
+
+	self.alertCheck = CreateCheck(watch, 'Sound')
+	self.alertCheck:SetPoint('LEFT', self.watchMaxPrice, 'RIGHT', 0, 0)
+	self.alertCheck:SetScript('OnClick', function(check)
+		ns.db.watchAlert = check:GetChecked() and true or false
+	end)
 
 	local upgrade = CreateFrame('Frame', nil, panel)
 	upgrade:SetPoint('TOPLEFT', LEFT, -34)

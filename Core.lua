@@ -14,12 +14,16 @@ ns.TITLE = '|cff1784d1Benis|rAH'
 
 local defaults = {
 	delay = 1, -- seconds between server queries, on top of the server throttle
-	mode = 'vendor', -- 'vendor' (below vendor price), 'search' (name + max price) or 'upgrade'
+	mode = 'vendor', -- 'vendor' (below vendor price), 'search' (name + max price), 'watch' or 'upgrade'
 	skipCategories = {}, -- [category name] = true for categories left out of the vendor scan
 	minProfit = 0, -- copper; vendor mode drops lots whose total profit is lower
 	searchName = '',
 	searchMax = 0, -- copper, per unit
 	exactMatch = false,
+	-- watch mode: one item, by its exact name
+	watchName = '',
+	watchMax = 0, -- copper, per unit
+	watchAlert = true, -- sound and taskbar flash when a cheap auction shows up
 	-- upgrade mode
 	skipSlots = {}, -- [slot key] = true for slots left out of the upgrade search
 	upgradeMax = 0, -- copper, per item; 0 = no limit (or nothing extra with upgradeSellLimit)

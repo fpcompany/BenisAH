@@ -23,6 +23,21 @@ Type an item name and the most you want to pay per item, then press **Scan**
 (or Enter). Every auction of a matching item at or under that price is listed.
 Tick **Exact name** to match the whole name instead of a part of it.
 
+### Watch one item
+
+For sniping a single item, such as Silk Cloth. Type its exact name and the
+most you want to pay per item, then press **Watch** (or Enter). The first
+check browses for the item to find it. After that, every check sends only
+that item's own search query, with no browse step and no other items, so a
+cheap auction shows up about one query (plus the delay) after it is posted.
+The item is browsed for again once a minute, to pick up item levels that
+appeared later.
+
+With **Sound** ticked, a new auction within the limit plays a raid warning
+sound and flashes the game's taskbar icon. On a stackable item, more units
+within the limit count as new, so you are told when someone else posts too.
+Buying still takes a click.
+
 ### Upgrades
 
 Lists, for each selected equipment slot, the auction that improves the most
@@ -64,7 +79,7 @@ was found and only look again at items whose price or quantity changed.
 ## Scanning
 
 The scan loops until you press **Stop**, switch to another tab or close the
-auction house. **Delay between queries** is the pause in seconds between two
+auction house. **Delay** is the pause in seconds between two
 server queries (0.2 to 60, also `/bah delay <seconds>`); it comes on top of the
 server's own throttle. Passes after the first only re-check items whose lowest
 price or quantity changed.

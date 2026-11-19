@@ -14,7 +14,7 @@ local _, ns = ...
 -- Upgrade mode keeps one 'item' entry per equipment slot, which also carries
 -- slot, slotLabel, order, score, gain, equippedLink and equippedScore.
 local Results = {
-	lists = { vendor = {}, search = {}, upgrade = {} },
+	lists = { vendor = {}, search = {}, watch = {}, upgrade = {} },
 }
 ns.Results = Results
 
@@ -30,6 +30,19 @@ end
 
 local function Changed()
 	if ns.UI then ns.UI:MarkDirty() end
+end
+
+-- Watch mode: a new cheap auction (a new row, or more units on a commodity
+-- row) sounds an alarm and flashes the taskbar, since the click is the slow part.
+local ALERT_INTERVAL = 2 -- seconds; several finds in a row make one sound
+local lastAlert = 0
+local function Alert(mode)
+	if mode ~= 'watch' or not ns.db.watchAlert then return end
+	local now = GetTime()
+	if now - lastAlert < ALERT_INTERVAL then return end
+	lastAlert = now
+	PlaySound(SOUNDKIT.RAID_WARNING or 8959, 'Master')
+	if FlashClientIcon then FlashClientIcon() end
 end
 
 -- Adds a new row where Compact would put it: on top. While rows are held
@@ -170,6 +183,7 @@ function Results:SetAuctions(mode, key, found, pass)
 				link = auction.link, found = NextSerial() }
 			Apply(entry, auction)
 			Insert(list, entry)
+			Alert(mode)
 		end
 	end
 
@@ -296,16 +310,21 @@ function Results:SetCommodity(mode, key, data, pass)
 	end
 
 	if data and #data.tiers > 0 then
+		local before = 0
 		if not entry then
 			entry = { kind = 'commodity', key = key, itemID = data.itemID, itemKey = data.itemKey,
 				found = NextSerial() }
 			Insert(list, entry)
+		else
+			before = entry.quantity or 0
 		end
 		entry.tiers = data.tiers
 		entry.limit = data.limit
 		entry.vendor = data.vendor
 		entry.pass = pass
 		UpdateCommodityTotals(entry)
+		-- fewer units means some sold; more means somebody posted
+		if entry.quantity > before then Alert(mode) end
 	elseif entry then
 		entry.gone = true
 	end
@@ -362,6 +381,7 @@ end
 local comparators = {
 	vendor = NewestFirst,
 	search = NewestFirst,
+	watch = NewestFirst,
 	-- in equipment slot order
 	upgrade = function(a, b)
 		if a.order ~= b.order then return a.order < b.order end
