@@ -87,6 +87,14 @@ weights yourself once you reach a cap. Casters and healers weigh spell power
 or healing power, never both. The button shows **(edited)** once you change a
 weight.
 
+Weights are saved per character, starting from your class's main spec.
+They come from [LibBenisScore](https://github.com/fpcompany/LibBenisScore),
+which BenisUI uses too. Its bag arrows use the same weights, and an edit in one
+addon shows in the other. Every item tooltip gets a line such as **Upgrade for
+Main hand: score 664.9 -> 747.0 (+82.1)**, or a gray "Not an upgrade" line. The
+switch for it is under the weights. `/bscore` opens the weights outside the
+auction house.
+
 No source gives a value for weapon DPS. The presets use 14 per DPS for each
 point of attack power the spec is worth, since 14 attack power add 1 DPS.
 Casters, healers and druids get 0, because druid forms ignore the weapon.
@@ -175,8 +183,14 @@ Symlink or copy the folder into your AddOns directory:
 ln -s /path/to/BenisAH "<WoW>/_forever_/Interface/AddOns/BenisAH"
 ```
 
+LibBenisScore is a git submodule in `Libs/LibBenisScore`. Clone with
+`--recurse-submodules`, or run `git submodule update --init` after cloning.
+To take a newer library version, run `git -C Libs/LibBenisScore pull`, then
+commit `Libs/LibBenisScore`.
+
 ## Commands
 
 - `/benisah` or `/bah` - help
 - `/bah delay <seconds>` - pause between server queries
 - `/bah stop` - stop a running scan
+- `/bscore` - stat weights in a window of their own

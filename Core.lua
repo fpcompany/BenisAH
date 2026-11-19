@@ -11,6 +11,7 @@ local ADDON_NAME, ns = ...
 --     (Buyer.lua); nothing is ever bought automatically
 
 ns.TITLE = '|cff1784d1Benis|rAH'
+ns.Score = LibStub('LibBenisScore-1.0')
 
 local defaults = {
 	delay = 1, -- seconds between server queries, on top of the server throttle
@@ -30,10 +31,8 @@ local defaults = {
 	upgradeSellLimit = false, -- the limit is the sell price of the equipped item, plus upgradeMax
 	upgradeMaxLevel = 0, -- highest required level; 0 = the character's level
 	upgradeArmor = 'auto', -- 'auto', 'cloth', 'leather', 'mail' or 'plate'
-	weights = {}, -- [stat key] = weight, filled from the presets in Presets.lua
-	weightPreset = false, -- key of the last preset applied (Presets.lua)
-	weaponChoice = false, -- last weapon button: 'slow', 'fast', 'any' or 'none'
 }
+-- Stat weights live in LibBenisScore, saved per character in BenisAHCharDB.score.
 
 ns.MIN_DELAY, ns.MAX_DELAY = 0.2, 60
 
@@ -88,6 +87,21 @@ ns.On('ADDON_LOADED', function(name)
 		end
 	end
 	ns.db = BenisAHDB
+
+	BenisAHCharDB = BenisAHCharDB or {}
+	local score = BenisAHCharDB.score or {}
+	BenisAHCharDB.score = score
+	-- Up to 0.2, the weights were saved for the whole account: the first
+	-- character to log in takes them over (at time 0, so weights another addon
+	-- saved for this character win), the others start from their class preset.
+	if type(BenisAHDB.weights) == 'table' and next(BenisAHDB.weights) and not score.weights then
+		score.weights = BenisAHDB.weights
+		score.preset = BenisAHDB.weightPreset or nil
+		score.weaponChoice = BenisAHDB.weaponChoice or nil
+		score.updated = 0
+	end
+	BenisAHDB.weights, BenisAHDB.weightPreset, BenisAHDB.weaponChoice = nil, nil, nil
+	ns.Score:Register(score)
 end)
 
 --------------------------------------------------------------------------------

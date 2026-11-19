@@ -4,15 +4,16 @@
 ## Author: Benis
 ## Version: 0.2.0
 ## SavedVariables: BenisAHDB
+## SavedVariablesPerCharacter: BenisAHCharDB
 ## OptionalDeps: Auctionator, LibAHTab
 ## Category-enUS: Auctions
 ## IconTexture: Interface\AddOns\BenisAH\Media\Icon
 ## X-Website: https://github.com/fpcompany/BenisAH
 
+Libs\LibBenisScore\LibBenisScore.xml
 Core.lua
 Results.lua
 Upgrade.lua
-Presets.lua
 Scanner.lua
 Buyer.lua
 UI.lua

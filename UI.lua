@@ -382,6 +382,8 @@ local function Row_ShowTooltip(row)
 	local entry = row.entry
 	if not entry then return end
 	GameTooltip:SetOwner(row.item, 'ANCHOR_RIGHT')
+	-- upgrade rows say what they replace below; no second line from LibBenisScore
+	row.item.benisScoreNoLine = entry.slot and true or nil
 	if entry.link then
 		GameTooltip:SetHyperlink(entry.link)
 	else
@@ -888,14 +890,9 @@ end
 -- Upgrade options: level, armor type, stat weights
 --------------------------------------------------------------------------------
 
-local function FormatWeight(value)
-	return ('%g'):format(value or 0)
-end
-
 function UI:BuildOptions()
 	if self.options then return end
 	local Upgrade = ns.Upgrade
-	Upgrade:EnsureWeights()
 
 	local frame = CreateFrame('Frame', 'BenisAHUpgradeOptions', self.panel, 'BasicFrameTemplateWithInset')
 	frame:SetSize(344, 400)
@@ -959,184 +956,28 @@ function UI:BuildOptions()
 		UI:UpdateUpgradeMaxLabel()
 	end)
 
-	-- presets and weapon choice
-	local presetLabel = CreateLabel(frame, 'Preset')
-	presetLabel:SetPoint('TOPLEFT', 16, -130)
-	local presetButton = CreateButton(frame, '', 200)
-	presetButton:SetPoint('LEFT', presetLabel, 'RIGHT', 10, 0)
+	-- presets, weapon choice and weights, shared with BenisUI (LibBenisScore)
+	local weights = ns.Score:CreateWeightsPanel(frame)
+	weights:SetPoint('TOPLEFT', 12, -124)
 
-	local weaponLabel = CreateLabel(frame, 'Weapon')
-	weaponLabel:SetPoint('TOPLEFT', 16, -160)
-	local weaponButtons = {}
-	local WEAPON_CHOICES = {
-		{ key = 'slow', text = 'Slow', tip = 'Slow weapons win at a similar DPS (two-handers, main hand of most melee, hunter bows).' },
-		{ key = 'fast', text = 'Fast', tip = 'Fast weapons win at a similar DPS.' },
-		{ key = 'any', text = 'Any speed', tip = 'Only the weapon\'s DPS and stats count, not its speed.' },
-		{ key = 'none', text = 'Ignore', tip = 'Weapon DPS and speed count for nothing, only stats (casters, healers, druids). Ranged/wand DPS is kept.' },
-	}
-	local anchor = weaponLabel
-	for _, choice in ipairs(WEAPON_CHOICES) do
-		local button = CreateButton(frame, choice.text, choice.key == 'any' and 74 or 58)
-		button:SetPoint('LEFT', anchor, 'RIGHT', anchor == weaponLabel and 10 or 2, 0)
-		button:SetScript('OnEnter', function()
-			GameTooltip:SetOwner(button, 'ANCHOR_RIGHT')
-			GameTooltip:SetText(choice.text)
-			GameTooltip:AddLine(choice.tip, 1, 1, 1, true)
-			GameTooltip:Show()
-		end)
-		button:SetScript('OnLeave', function() GameTooltip:Hide() end)
-		weaponButtons[choice.key] = button
-		anchor = button
-	end
-
-	-- weights, in two columns
-	local TOP = -192
-	local weightsLabel = CreateLabel(frame, 'Stat weights (score = stat x weight)')
-	weightsLabel:SetPoint('TOPLEFT', 16, TOP)
-
-	local Refresh -- below
-	local weightBoxes = {}
-	local perColumn = math.ceil(#Upgrade.STATS / 2)
-	for index, stat in ipairs(Upgrade.STATS) do
-		local column = math.floor((index - 1) / perColumn)
-		local line = (index - 1) % perColumn
-		local label = CreateLabel(frame, stat.label, 'GameFontHighlightSmall')
-		label:SetPoint('TOPLEFT', 16 + column * 164, TOP - 26 - line * 24)
-		label:SetWidth(100)
-		label:SetJustifyH('LEFT')
-
-		local box = CreateEditBox(frame, 44, false, 6)
-		box:SetPoint('LEFT', label, 'RIGHT', 4, 0)
-		box:SetJustifyH('RIGHT')
-		box:SetScript('OnTextChanged', function(edit, userInput)
-			if not userInput then return end
-			local value = tonumber((edit:GetText():gsub(',', '.')))
-			if value then
-				ns.db.weights[stat.key] = value
-				UI:UpdatePresetButton()
-			end
-		end)
-		box:SetScript('OnEditFocusLost', function(edit)
-			edit:HighlightText(0, 0)
-			edit:SetText(FormatWeight(ns.db.weights[stat.key]))
-		end)
-		if stat.tip then
-			box:SetScript('OnEnter', function()
-				GameTooltip:SetOwner(box, 'ANCHOR_RIGHT')
-				GameTooltip:SetText(stat.label)
-				GameTooltip:AddLine(stat.tip, 1, 1, 1, true)
-				GameTooltip:Show()
-			end)
-			box:SetScript('OnLeave', function() GameTooltip:Hide() end)
-		end
-		weightBoxes[stat.key] = box
-		boxes[#boxes + 1] = box
-	end
-
-	-- Tab moves on to the next box
-	for index, box in ipairs(boxes) do
-		box:SetScript('OnTabPressed', function()
-			local nextBox = boxes[index % #boxes + 1]
-			nextBox:SetFocus()
-			nextBox:HighlightText()
-		end)
-	end
-
-	-- the preset's name, marked when a weight was changed since
-	function UI:UpdatePresetButton()
-		local preset = Upgrade:FindPreset(ns.db.weightPreset)
-		if not preset then
-			presetButton:SetText('Choose a spec...')
-		else
-			local edited = false
-			local weights = Upgrade:PresetWeights(preset)
-			local speed = Upgrade:WeaponSpeedWeights(ns.db.weaponChoice or preset.speed,
-				ns.db.weights.dps, ns.db.weights.rdps)
-			weights.dps, weights.speed = ns.db.weights.dps, speed.speed
-			for key, value in pairs(weights) do
-				if math.abs((ns.db.weights[key] or 0) - value) > 0.0001 then edited = true end
-			end
-			presetButton:SetText(('%s %s%s'):format(preset.spec, preset.class, edited and ' (edited)' or ''))
-		end
-		for key, button in pairs(weaponButtons) do
-			if key == ns.db.weaponChoice then button:LockHighlight() else button:UnlockHighlight() end
-		end
-	end
-
-	Refresh = function()
+	local function Refresh()
 		local level = tonumber(ns.db.upgradeMaxLevel) or 0
 		levelBox:SetText(level)
 		levelHint:SetText(('0 = your level (%d)'):format(UnitLevel('player')))
 		armorButton:SetText(ArmorText())
 		sellCheck:SetChecked(ns.db.upgradeSellLimit)
-		for key, box in pairs(weightBoxes) do
-			box:SetText(FormatWeight(ns.db.weights[key]))
-		end
-		UI:UpdatePresetButton()
+		weights:Refresh()
 	end
-
-	for key, button in pairs(weaponButtons) do
-		button:SetScript('OnClick', function()
-			UI:ClearFocus()
-			Upgrade:ApplyWeaponChoice(key)
-			Refresh()
-		end)
-	end
-
-	presetButton:SetScript('OnClick', function()
-		UI:ClearFocus()
-		MenuUtil.CreateContextMenu(presetButton, function(_, root)
-			root:CreateTitle('Stat weights of a spec')
-			local own = Upgrade.PRESET_CLASSES[select(2, UnitClass('player'))]
-			local function IsSelected(key) return ns.db.weightPreset == key end
-			local function Select(key)
-				Upgrade:ApplyPreset(key)
-				Refresh()
-			end
-			local menus, order = {}, {}
-			for _, preset in ipairs(Upgrade.PRESETS) do
-				if not menus[preset.class] then
-					order[#order + 1] = preset.class
-					menus[preset.class] = {}
-				end
-				table.insert(menus[preset.class], preset)
-			end
-			-- the character's own class first and open, the others as submenus
-			if own and menus[own] then
-				for _, preset in ipairs(menus[own]) do
-					root:CreateRadio(('%s %s'):format(preset.spec, preset.class), IsSelected, Select, preset.key)
-				end
-				root:CreateDivider()
-			end
-			for _, class in ipairs(order) do
-				if class ~= own then
-					local sub = root:CreateButton(class)
-					for _, preset in ipairs(menus[class]) do
-						sub:CreateRadio(preset.spec, IsSelected, Select, preset.key)
-					end
-				end
-			end
-		end)
-	end)
-	presetButton:SetScript('OnEnter', function()
-		GameTooltip:SetOwner(presetButton, 'ANCHOR_RIGHT')
-		GameTooltip:SetText('Spec presets')
-		GameTooltip:AddLine('Fills every weight from WoWSims Forever pre-raid stat weights '
-			.. '(wowforeverbislist.com, November 2026). Hit and crit are per rating point '
-			.. '(10 hit, 14 crit = 1%). Caps are not modeled: once you reach the hit, '
-			.. 'expertise or defense cap, lower those weights yourself.', 1, 1, 1, true)
-		GameTooltip:Show()
-	end)
-	presetButton:SetScript('OnLeave', function() GameTooltip:Hide() end)
 
 	local note = CreateLabel(frame, 'Changes apply from the next scan pass.', 'GameFontDisableSmall')
-	note:SetPoint('TOPLEFT', 16, TOP - 30 - perColumn * 24)
+	note:SetPoint('TOPLEFT', weights, 'BOTTOMLEFT', 4, -2)
 
-	frame:SetHeight(-TOP + 30 + perColumn * 24 + 30)
+	frame:SetHeight(124 + weights:GetHeight() + 26)
 	frame:SetScript('OnShow', Refresh)
 
 	function frame:ClearFocus()
 		for _, box in ipairs(boxes) do box:ClearFocus() end
+		weights:ClearFocus()
 	end
 end
 

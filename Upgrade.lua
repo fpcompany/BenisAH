@@ -8,7 +8,7 @@ local _, ns = ...
 -- an off-hand item), up to a required level. Items whose tooltip shows red
 -- text (wrong weapon type, class, reputation...) are left out.
 --
--- An item's score is the sum of its stats times the user's weights, plus its
+-- An item's score comes from LibBenisScore: its stats times the weights, plus its
 -- weapon DPS times the DPS weight and (speed - 2.0) times the speed weight,
 -- so slow weapons come out ahead. Browse results are scored as their base
 -- item; an item whose stats can differ per auction (random suffix, another
@@ -17,103 +17,17 @@ local _, ns = ...
 -- tie. Rings and trinkets compare against the weaker of the two equipped.
 local Upgrade = {
 	cache = {}, -- [item key] = { minPrice, quantity, auction } of looked up items
-	scores = {}, -- [item link] = { score, usable }, rebuilt every pass
 	baseline = {}, -- [slot key] = { score, link, otherItemID } of what is equipped
 	passBest = {}, -- [slot key] = the best upgrade found this pass
 }
 ns.Upgrade = Upgrade
 
 local EPSILON = 0.001
-local BASE_SPEED = 2.0 -- weapons slower than this get a bonus, faster ones a malus
-local WEAPON_CLASS = 2
-local WAND_SUBCLASS = 19
--- bow, gun, thrown, crossbow, wand: scored with the ranged DPS weight
-local RANGED_SUBCLASSES = { [2] = true, [3] = true, [16] = true, [18] = true, [19] = true }
-
-local GetItemStats = C_Item and C_Item.GetItemStats or GetItemStats
 local GetItemInfoInstant = C_Item and C_Item.GetItemInfoInstant or GetItemInfoInstant
 
 --------------------------------------------------------------------------------
--- Stats and weights
+-- Sell price and score
 --------------------------------------------------------------------------------
-
--- `mods` are the keys GetItemStats uses for the stat; when an item has several
--- of them, the biggest counts. The per spec presets are in Presets.lua.
--- Spell power counts items that raise damage and healing, or damage only;
--- healing power counts items that raise healing, or damage and healing. So
--- a healer weighs healing power and a caster spell power, never both.
-Upgrade.STATS = {
-	{ key = 'dps', label = 'Weapon DPS', mods = { 'ITEM_MOD_DAMAGE_PER_SECOND_SHORT' },
-		tip = 'DPS of melee weapons. Ranged weapons and wands use Ranged DPS.' },
-	{ key = 'rdps', label = 'Ranged/wand DPS',
-		tip = 'DPS of bows, guns, crossbows, thrown weapons and wands.' },
-	{ key = 'speed', label = 'Speed over 2.0s',
-		tip = 'Added per second of weapon speed above 2.0 (taken off below it), so slow weapons win at similar DPS. Wands do not count.' },
-	{ key = 'hit', label = 'Hit',
-		mods = { 'ITEM_MOD_HIT_RATING_SHORT', 'ITEM_MOD_HIT_MELEE_RATING_SHORT', 'ITEM_MOD_HIT_SPELL_RATING_SHORT',
-			'ITEM_MOD_HIT_RANGED_RATING_SHORT' } },
-	{ key = 'crit', label = 'Crit',
-		mods = { 'ITEM_MOD_CRIT_RATING_SHORT', 'ITEM_MOD_CRIT_MELEE_RATING_SHORT', 'ITEM_MOD_CRIT_SPELL_RATING_SHORT',
-			'ITEM_MOD_CRIT_RANGED_RATING_SHORT' } },
-	{ key = 'haste', label = 'Haste',
-		mods = { 'ITEM_MOD_HASTE_RATING_SHORT', 'ITEM_MOD_HASTE_MELEE_RATING_SHORT', 'ITEM_MOD_HASTE_SPELL_RATING_SHORT',
-			'ITEM_MOD_HASTE_RANGED_RATING_SHORT' } },
-	{ key = 'expertise', label = 'Expertise', mods = { 'ITEM_MOD_EXPERTISE_RATING_SHORT' } },
-	{ key = 'str', label = 'Strength', mods = { 'ITEM_MOD_STRENGTH_SHORT' } },
-	{ key = 'agi', label = 'Agility', mods = { 'ITEM_MOD_AGILITY_SHORT' } },
-	{ key = 'int', label = 'Intellect', mods = { 'ITEM_MOD_INTELLECT_SHORT' } },
-	{ key = 'spi', label = 'Spirit', mods = { 'ITEM_MOD_SPIRIT_SHORT' } },
-	{ key = 'sta', label = 'Stamina', mods = { 'ITEM_MOD_STAMINA_SHORT' } },
-	{ key = 'ap', label = 'Attack power',
-		mods = { 'ITEM_MOD_ATTACK_POWER_SHORT', 'ITEM_MOD_MELEE_ATTACK_POWER_SHORT',
-			'ITEM_MOD_RANGED_ATTACK_POWER_SHORT', 'ITEM_MOD_FERAL_ATTACK_POWER_SHORT' } },
-	{ key = 'arp', label = 'Armor pen.', mods = { 'ITEM_MOD_ARMOR_PENETRATION_RATING_SHORT' } },
-	{ key = 'sp', label = 'Spell power',
-		mods = { 'ITEM_MOD_SPELL_POWER_SHORT', 'ITEM_MOD_SPELL_DAMAGE_DONE_SHORT' } },
-	{ key = 'hp', label = 'Healing power',
-		mods = { 'ITEM_MOD_SPELL_HEALING_DONE_SHORT', 'ITEM_MOD_SPELL_POWER_SHORT' } },
-	{ key = 'pierce', label = 'Spell pierce', mods = { 'ITEM_MOD_SPELL_PENETRATION_SHORT' } },
-	{ key = 'mp5', label = 'Mana per 5',
-		mods = { 'ITEM_MOD_MANA_REGENERATION_SHORT', 'ITEM_MOD_POWER_REGEN0_SHORT' } },
-	{ key = 'armor', label = 'Armor', mods = { 'RESISTANCE0_NAME' } },
-	{ key = 'def', label = 'Defense', mods = { 'ITEM_MOD_DEFENSE_SKILL_RATING_SHORT' } },
-	{ key = 'dodge', label = 'Dodge', mods = { 'ITEM_MOD_DODGE_RATING_SHORT' } },
-	{ key = 'parry', label = 'Parry', mods = { 'ITEM_MOD_PARRY_RATING_SHORT' } },
-	{ key = 'block', label = 'Block', mods = { 'ITEM_MOD_BLOCK_RATING_SHORT' } },
-	{ key = 'blockval', label = 'Block value', mods = { 'ITEM_MOD_BLOCK_VALUE_SHORT' } },
-}
-
--- Fills in every weight the user has not set: from the default preset on a
--- fresh install, 0 for a stat added since the weights were saved.
-function Upgrade:EnsureWeights()
-	local weights = ns.db.weights
-	if next(weights) == nil then
-		self:ApplyPreset(self.DEFAULT_PRESET)
-		return
-	end
-	for _, stat in ipairs(self.STATS) do
-		if type(weights[stat.key]) ~= 'number' then weights[stat.key] = 0 end
-	end
-end
-
---------------------------------------------------------------------------------
--- Tooltip: weapon speed, DPS fallback, usability
---------------------------------------------------------------------------------
-
--- turns a format string like "Requires Level %d" into a Lua pattern
-local function FormatToPattern(format)
-	local pattern = format:gsub('%%[ds]', '\001')
-	pattern = pattern:gsub('[%(%)%.%+%-%*%?%[%]%^%$%%]', '%%%0')
-	return (pattern:gsub('\001', '([%%d%%.,]+)'))
-end
-
-local LEVEL_PATTERN = FormatToPattern(ITEM_MIN_LEVEL or 'Requires Level %d')
-local DPS_PATTERN = FormatToPattern(DPS_TEMPLATE or '(%s damage per second)')
-local SPEED_PATTERN = '^' .. FormatToPattern(WEAPON_SPEED or 'Speed') .. '%s*([%d%.,]+)'
-
-local function ToNumber(text)
-	return text and tonumber((text:gsub(',', '.')))
-end
 
 local scanTip = CreateFrame('GameTooltip', 'BenisAHScanTooltip', nil, 'GameTooltipTemplate')
 
@@ -159,72 +73,10 @@ local function SellPrice(invSlot, link)
 	return base
 end
 
--- Red text in a tooltip means the character cannot use the item (weapon type,
--- class, reputation...). The level requirement is red too while the item is
--- above the character's level, but the level is checked on its own.
-local function ScanTooltip(link)
-	local info = { usable = true }
-	scanTip:SetOwner(WorldFrame, 'ANCHOR_NONE')
-	scanTip:ClearLines()
-	if not pcall(scanTip.SetHyperlink, scanTip, link) then
-		scanTip:Hide()
-		return info
-	end
-	for line = 1, scanTip:NumLines() do
-		for _, side in ipairs({ 'Left', 'Right' }) do
-			local fontString = _G['BenisAHScanTooltipText' .. side .. line]
-			local text = fontString and fontString:IsShown() and fontString:GetText()
-			if text and text ~= '' then
-				-- red either as the line's color or as a color code in the text
-				local r, g, b = fontString:GetTextColor()
-				local red = (r > 0.95 and g < 0.2 and b < 0.2) or text:lower():find('|cffff2020', 1, true)
-				text = text:gsub('|c%x%x%x%x%x%x%x%x', ''):gsub('|r', '')
-				if red and not text:match(LEVEL_PATTERN) then
-					info.usable = false
-				end
-				info.speed = info.speed or ToNumber(text:match(SPEED_PATTERN))
-				info.dps = info.dps or ToNumber(text:match(DPS_PATTERN))
-			end
-		end
-	end
-	scanTip:Hide()
-	return info
-end
-
--- score of one item, see the top of the file
+-- score and { usable } of one item, from LibBenisScore (stats times the
+-- character's weights; usable is false when the tooltip shows red text)
 function Upgrade:Score(link)
-	local known = self.scores[link]
-	if known then return known.score, known end
-
-	local stats = GetItemStats(link) or {}
-	local tip = ScanTooltip(link)
-	local weights = ns.db.weights
-	local _, _, _, _, _, classID, subClassID = GetItemInfoInstant(link)
-	local ranged = classID == WEAPON_CLASS and RANGED_SUBCLASSES[subClassID]
-	local wand = ranged and subClassID == WAND_SUBCLASS
-
-	local dps = tonumber(stats.ITEM_MOD_DAMAGE_PER_SECOND_SHORT) or 0
-	if dps == 0 then dps = tip.dps or 0 end
-	local score = 0
-	for _, stat in ipairs(self.STATS) do
-		local value = 0
-		if stat.key == 'dps' then
-			value = ranged and 0 or dps
-		elseif stat.key == 'rdps' then
-			value = ranged and dps or 0
-		elseif stat.key == 'speed' then
-			value = (tip.speed and not wand) and (tip.speed - BASE_SPEED) or 0
-		else
-			for _, mod in ipairs(stat.mods or {}) do
-				value = math.max(value, tonumber(stats[mod]) or 0)
-			end
-		end
-		score = score + value * (weights[stat.key] or 0)
-	end
-
-	known = { score = score, usable = tip.usable }
-	self.scores[link] = known
-	return score, known
+	return ns.Score:Score(link)
 end
 
 --------------------------------------------------------------------------------
@@ -414,8 +266,6 @@ end
 -- Takes a fresh look at what is equipped and returns the browse queries of
 -- the pass, or nil when no slot is left to search.
 function Upgrade:BeginPass()
-	self:EnsureWeights()
-	wipe(self.scores)
 	wipe(self.baseline)
 	wipe(self.passBest)
 	self.maxLevel = self:MaxLevel()
